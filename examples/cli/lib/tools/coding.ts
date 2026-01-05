@@ -470,6 +470,9 @@ Be concise but thorough.`;
               
               const analysis = analysisResult.text;
               log(`      Analysis complete`, 'green');
+              // Show a preview of the analysis
+              const analysisPreview = analysisResult.text.slice(0, 200) + (analysisResult.text.length > 200 ? '...' : '');
+              log(`      Vision: ${analysisPreview}`, 'dim');
               
               return { 
                 success: true, 
@@ -580,7 +583,8 @@ Be concise but thorough.`;
           const result = await runInSandbox(`${PLAYWRIGHT_ENV} node /tmp/browser-interact.js 2>&1`);
           
           if (result.exitCode !== 0) {
-            log(`  [x] Browser action failed`, 'red');
+            const errorOutput = (result.stdout || result.stderr || 'Unknown error').slice(0, 300);
+            log(`  [x] Browser action failed: ${errorOutput}`, 'red');
             return { success: false, error: result.stdout || result.stderr };
           }
           
@@ -628,13 +632,16 @@ Be concise but thorough.`;
                 });
                 analysis = analysisResult.text;
                 log(`      Analysis complete`, 'green');
+                // Show a preview of the analysis
+                const analysisPreview = analysisResult.text.slice(0, 200) + (analysisResult.text.length > 200 ? '...' : '');
+                log(`      Vision: ${analysisPreview}`, 'dim');
               } catch (e: any) {
                 analysis = `Screenshot taken but analysis failed: ${e.message}`;
               }
             }
           }
           
-          return { 
+          return {
             success: true, 
             action,
             pageContent,
@@ -642,7 +649,7 @@ Be concise but thorough.`;
             analysis,
           };
         } catch (error: any) {
-          log(`  [x] Browser action failed`, 'red');
+          log(`  [x] Browser action failed: ${error.message}`, 'red');
           return { success: false, error: error.message };
         }
       },
