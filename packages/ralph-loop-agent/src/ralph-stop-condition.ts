@@ -40,16 +40,87 @@ export type RalphStopCondition<TOOLS extends ToolSet = {}> = (
 export type CostRates = {
   inputCostPerMillionTokens: number;
   outputCostPerMillionTokens: number;
+  cacheReadCostPerMillionTokens?: number;
+  cacheWriteCostPerMillionTokens?: number;
 };
 
 /**
  * Pricing for common models (cost per million tokens in USD).
  */
 const MODEL_PRICING: Record<string, CostRates> = {
-  // Anthropic
-  'anthropic/claude-opus-4.5': { inputCostPerMillionTokens: 5.0, outputCostPerMillionTokens: 25.0 },
-  'anthropic/claude-sonnet-4': { inputCostPerMillionTokens: 3.0, outputCostPerMillionTokens: 15.0 },
-  'anthropic/claude-haiku': { inputCostPerMillionTokens: 0.25, outputCostPerMillionTokens: 1.25 },
+  // Anthropic - Haiku models
+  'anthropic/claude-3-haiku': { 
+    inputCostPerMillionTokens: 0.25, 
+    outputCostPerMillionTokens: 1.25,
+    cacheReadCostPerMillionTokens: 0.03,
+    cacheWriteCostPerMillionTokens: 0.30,
+  },
+  'anthropic/claude-3.5-haiku': { 
+    inputCostPerMillionTokens: 0.80, 
+    outputCostPerMillionTokens: 4.00,
+    cacheReadCostPerMillionTokens: 0.08,
+    cacheWriteCostPerMillionTokens: 1.00,
+  },
+  'anthropic/claude-haiku-4.5': { 
+    inputCostPerMillionTokens: 1.00, 
+    outputCostPerMillionTokens: 5.00,
+    cacheReadCostPerMillionTokens: 0.10,
+    cacheWriteCostPerMillionTokens: 1.25,
+  },
+  // Anthropic - Sonnet models
+  'anthropic/claude-sonnet-4.5': { 
+    inputCostPerMillionTokens: 3.0, 
+    outputCostPerMillionTokens: 15.0,
+    cacheReadCostPerMillionTokens: 0.30,
+    cacheWriteCostPerMillionTokens: 3.75,
+  },
+  'anthropic/claude-3.7-sonnet': { 
+    inputCostPerMillionTokens: 3.0, 
+    outputCostPerMillionTokens: 15.0,
+    cacheReadCostPerMillionTokens: 0.30,
+    cacheWriteCostPerMillionTokens: 3.75,
+  },
+  'anthropic/claude-sonnet-4': { 
+    inputCostPerMillionTokens: 3.0, 
+    outputCostPerMillionTokens: 15.0,
+    cacheReadCostPerMillionTokens: 0.30,
+    cacheWriteCostPerMillionTokens: 3.75,
+  },
+  'anthropic/claude-3.5-sonnet': { 
+    inputCostPerMillionTokens: 3.0, 
+    outputCostPerMillionTokens: 15.0,
+    cacheReadCostPerMillionTokens: 0.30,
+    cacheWriteCostPerMillionTokens: 3.75,
+  },
+  'anthropic/claude-3.5-sonnet-20241022': { 
+    inputCostPerMillionTokens: 3.0, 
+    outputCostPerMillionTokens: 15.0,
+    // No caching for this model
+  },
+  // Anthropic - Opus models
+  'anthropic/claude-opus-4.5': { 
+    inputCostPerMillionTokens: 5.0, 
+    outputCostPerMillionTokens: 25.0,
+    cacheReadCostPerMillionTokens: 0.50,
+    cacheWriteCostPerMillionTokens: 6.25,
+  },
+  'anthropic/claude-opus-4.1': { 
+    inputCostPerMillionTokens: 15.0, 
+    outputCostPerMillionTokens: 75.0,
+    cacheReadCostPerMillionTokens: 1.50,
+    cacheWriteCostPerMillionTokens: 18.75,
+  },
+  'anthropic/claude-opus-4': { 
+    inputCostPerMillionTokens: 15.0, 
+    outputCostPerMillionTokens: 75.0,
+    cacheReadCostPerMillionTokens: 1.50,
+    cacheWriteCostPerMillionTokens: 18.75,
+  },
+  'anthropic/claude-3-opus': { 
+    inputCostPerMillionTokens: 15.0, 
+    outputCostPerMillionTokens: 75.0,
+    // No caching for this model
+  },
   // OpenAI
   'openai/gpt-4o': { inputCostPerMillionTokens: 2.5, outputCostPerMillionTokens: 10.0 },
   'openai/gpt-4o-mini': { inputCostPerMillionTokens: 0.15, outputCostPerMillionTokens: 0.6 },
@@ -156,28 +227,51 @@ export function aggregateStepUsage<TOOLS extends ToolSet>(
     }
   }
 
-  // Compare with result.usage and use the higher values
-  // (in case provider reports differently at different levels)
+  // Compare with result.usage and use the higher values for main counts
+  // Keep aggregated cache details since result.usage often doesn't have them
   const resultUsage = result.usage;
   return {
     inputTokens: Math.max(aggregated.inputTokens ?? 0, resultUsage.inputTokens ?? 0),
     outputTokens: Math.max(aggregated.outputTokens ?? 0, resultUsage.outputTokens ?? 0),
     totalTokens: Math.max(aggregated.totalTokens ?? 0, resultUsage.totalTokens ?? 0),
-    inputTokenDetails: aggregated.inputTokenDetails,
+    inputTokenDetails: {
+      noCacheTokens: aggregated.inputTokenDetails?.noCacheTokens,
+      cacheReadTokens: aggregated.inputTokenDetails?.cacheReadTokens,
+      cacheWriteTokens: aggregated.inputTokenDetails?.cacheWriteTokens,
+    },
     outputTokenDetails: aggregated.outputTokenDetails,
   };
 }
 
 /**
  * Calculate cost from usage and rates.
+ * Accounts for prompt caching if cache token details are available.
  */
 export function calculateCost(usage: LanguageModelUsage, rates: CostRates): number {
-  const inputTokens = usage.inputTokens ?? 0;
   const outputTokens = usage.outputTokens ?? 0;
-  return (
-    (inputTokens / 1_000_000) * rates.inputCostPerMillionTokens +
-    (outputTokens / 1_000_000) * rates.outputCostPerMillionTokens
-  );
+  const cacheReadTokens = usage.inputTokenDetails?.cacheReadTokens ?? 0;
+  const cacheWriteTokens = usage.inputTokenDetails?.cacheWriteTokens ?? 0;
+  
+  // Calculate input cost with cache awareness
+  let inputCost: number;
+  if (cacheReadTokens > 0 || cacheWriteTokens > 0) {
+    // Cache is being used - calculate with cache rates
+    const uncachedInputTokens = (usage.inputTokens ?? 0) - cacheReadTokens - cacheWriteTokens;
+    const cacheReadRate = rates.cacheReadCostPerMillionTokens ?? rates.inputCostPerMillionTokens;
+    const cacheWriteRate = rates.cacheWriteCostPerMillionTokens ?? rates.inputCostPerMillionTokens;
+    
+    inputCost = 
+      (uncachedInputTokens / 1_000_000) * rates.inputCostPerMillionTokens +
+      (cacheReadTokens / 1_000_000) * cacheReadRate +
+      (cacheWriteTokens / 1_000_000) * cacheWriteRate;
+  } else {
+    // No cache info - use standard input rate
+    inputCost = ((usage.inputTokens ?? 0) / 1_000_000) * rates.inputCostPerMillionTokens;
+  }
+  
+  const outputCost = (outputTokens / 1_000_000) * rates.outputCostPerMillionTokens;
+  
+  return inputCost + outputCost;
 }
 
 /**
