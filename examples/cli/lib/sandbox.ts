@@ -317,7 +317,7 @@ async function runInSandboxInternal(command: string): Promise<{ stdout: string; 
 }
 
 /**
- * Copy files from local directory to sandbox (respects .gitignore)
+ * Copy files from local directory to sandbox (respects .gitignore, always excludes .env* files)
  */
 async function copyLocalToSandbox(localDir: string): Promise<void> {
   log('  [-] Copying project files to sandbox...', 'cyan');
@@ -327,6 +327,23 @@ async function copyLocalToSandbox(localDir: string): Promise<void> {
   
   const filesToCopy: { path: string; content: Buffer }[] = [];
   
+  // Files/folders to NEVER copy to sandbox (regardless of gitignore)
+  const shouldAlwaysSkip = (name: string, isDirectory: boolean) => {
+    // .env files (security: prevent leaking secrets)
+    if (name === '.env' || name.startsWith('.env.')) {
+      return true;
+    }
+    // macOS metadata files
+    if (name === '.DS_Store') {
+      return true;
+    }
+    // node_modules (too large, will be installed fresh in sandbox)
+    if (isDirectory && name === 'node_modules') {
+      return true;
+    }
+    return false;
+  };
+  
   async function collectFiles(dir: string, prefix = ''): Promise<void> {
     try {
       const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -334,6 +351,11 @@ async function copyLocalToSandbox(localDir: string): Promise<void> {
       for (const entry of entries) {
         const localPath = path.join(dir, entry.name);
         const sandboxPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        
+        // Always skip certain files/folders (regardless of gitignore)
+        if (shouldAlwaysSkip(entry.name, entry.isDirectory())) {
+          continue;
+        }
         
         // Check if path is ignored by .gitignore
         // For directories, add trailing slash for proper matching
