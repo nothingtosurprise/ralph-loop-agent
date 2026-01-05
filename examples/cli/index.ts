@@ -26,7 +26,7 @@
 // Load environment variables from .env file
 import 'dotenv/config';
 
-import { RalphLoopAgent, iterationCountIs, type VerifyCompletionContext } from 'ralph-wiggum';
+import { RalphLoopAgent, iterationCountIs, type VerifyCompletionContext } from 'ralph-loop-agent';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import prompts from 'prompts';

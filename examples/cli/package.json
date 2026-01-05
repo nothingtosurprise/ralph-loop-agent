@@ -1,5 +1,5 @@
 {
-  "name": "ralph-wiggum-cli-example",
+  "name": "ralph-loop-agent-cli-example",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     "start": "tsx index.ts"
   },
   "dependencies": {
-    "ralph-wiggum": "workspace:*",
+    "ralph-loop-agent": "workspace:*",
     "ai": "^6.0.0",
     "zod": "^4.0.0",
     "prompts": "^2.4.2",

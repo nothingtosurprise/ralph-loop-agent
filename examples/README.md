@@ -1,6 +1,6 @@
 # Examples
 
-This directory contains example projects demonstrating how to use `ralph-wiggum`.
+This directory contains example projects demonstrating how to use `ralph-loop-agent`.
 
 ## Examples
 

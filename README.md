@@ -1,4 +1,4 @@
-# ralph
+# ralph-loop-agent
 
 > **⚠️ EXPERIMENTAL - USE AT YOUR OWN RISK**
 >
@@ -9,7 +9,7 @@ An iterative AI agent that implements the "Ralph Wiggum" technique - continuousl
 ## Installation
 
 ```bash
-npm install ralph-wiggum ai zod
+npm install ralph-loop-agent ai zod
 ```
 
 ## What is the Ralph Wiggum Technique?
@@ -35,7 +35,7 @@ Named after the lovably persistent character from *The Simpsons*, the Ralph Wigg
 ### Basic Example
 
 ```typescript
-import { RalphLoopAgent, iterationCountIs } from 'ralph-wiggum';
+import { RalphLoopAgent, iterationCountIs } from 'ralph-loop-agent';
 
 const agent = new RalphLoopAgent({
   model: 'anthropic/claude-opus-4.5',
@@ -59,7 +59,7 @@ console.log(`Reason: ${completionReason}`);
 ### Migration Example
 
 ```typescript
-import { RalphLoopAgent, iterationCountIs } from 'ralph-wiggum';
+import { RalphLoopAgent, iterationCountIs } from 'ralph-loop-agent';
 
 const migrationAgent = new RalphLoopAgent({
   model: 'anthropic/claude-opus-4.5',
@@ -104,7 +104,7 @@ console.log(result.completionReason);
 ### With Tools
 
 ```typescript
-import { RalphLoopAgent, iterationCountIs } from 'ralph-wiggum';
+import { RalphLoopAgent, iterationCountIs } from 'ralph-loop-agent';
 import { tool } from 'ai';
 import { z } from 'zod';
 
@@ -166,7 +166,7 @@ Note: Streaming runs non-streaming iterations until verification passes or the f
 Creates a stop condition that stops after `n` iterations.
 
 ```typescript
-import { iterationCountIs } from 'ralph-wiggum';
+import { iterationCountIs } from 'ralph-loop-agent';
 
 stopWhen: iterationCountIs(50)
 ```
