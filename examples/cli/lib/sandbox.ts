@@ -22,15 +22,35 @@ export function getSandboxDomain(): string | null {
 }
 
 /**
- * Helper to convert ReadableStream to string
+ * Helper to convert ReadableStream to Buffer
  */
-export async function streamToString(stream: NodeJS.ReadableStream): Promise<string> {
+async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of stream) {
     chunks.push(Buffer.from(chunk));
   }
-  return Buffer.concat(chunks).toString('utf-8');
+  return Buffer.concat(chunks);
 }
+
+/**
+ * Helper to convert ReadableStream to string
+ */
+export async function streamToString(stream: NodeJS.ReadableStream): Promise<string> {
+  const buffer = await streamToBuffer(stream);
+  return buffer.toString('utf-8');
+}
+
+/**
+ * Binary file extensions that should not be treated as text
+ */
+const BINARY_EXTENSIONS = new Set([
+  '.ico', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.tiff',
+  '.woff', '.woff2', '.ttf', '.otf', '.eot',
+  '.pdf', '.zip', '.tar', '.gz', '.rar', '.7z',
+  '.mp3', '.mp4', '.wav', '.ogg', '.webm', '.avi', '.mov',
+  '.exe', '.dll', '.so', '.dylib',
+  '.wasm',
+]);
 
 /**
  * Load all .gitignore files from a directory tree and create an ignore instance
@@ -657,9 +677,19 @@ async function copySandboxToLocal(localDir: string): Promise<void> {
     try {
       const stream = await sandbox!.readFile({ path: sandboxPath });
       if (stream) {
-        const content = await streamToString(stream);
         await fs.mkdir(path.dirname(localPath), { recursive: true });
-        await fs.writeFile(localPath, content, 'utf-8');
+        
+        // Check if file is binary based on extension
+        const ext = path.extname(sandboxPath).toLowerCase();
+        if (BINARY_EXTENSIONS.has(ext)) {
+          // Binary file - write as buffer
+          const buffer = await streamToBuffer(stream);
+          await fs.writeFile(localPath, buffer);
+        } else {
+          // Text file - write as UTF-8
+          const content = await streamToString(stream);
+          await fs.writeFile(localPath, content, 'utf-8');
+        }
         copiedCount++;
       }
     } catch {
