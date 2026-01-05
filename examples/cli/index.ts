@@ -77,16 +77,22 @@ let lastFilesModified: string[] = [];
 // Track sandbox state for cleanup
 let sandboxInitialized = false;
 let isCleaningUp = false;
+let lastCtrlC = 0;
+let interruptPending = false;
+let interruptResolver: ((action: 'continue' | 'followup' | 'save' | 'quit') => void) | null = null;
+let followUpPrompt = '';
 
-// Cleanup function for all exit scenarios
+// Cleanup function - just closes sandbox, doesn't copy files
 async function cleanup(exitCode: number = 0) {
-  if (isCleaningUp) return; // Prevent double cleanup
+  if (isCleaningUp) return;
   isCleaningUp = true;
   
   if (sandboxInitialized) {
-    log('\n  [~] Cleaning up sandbox...', 'yellow');
+    log('\n  [~] Closing sandbox (changes NOT saved)...', 'yellow');
     try {
-      await closeSandbox(resolvedDir);
+      // Close without copying files back
+      const { closeSandboxWithoutCopy } = await import('./lib/sandbox.js');
+      await closeSandboxWithoutCopy();
       log('  [+] Sandbox closed', 'green');
     } catch (error) {
       log(`  [x] Error closing sandbox: ${error}`, 'red');
@@ -96,28 +102,124 @@ async function cleanup(exitCode: number = 0) {
   process.exit(exitCode);
 }
 
-// Handle Ctrl+C (SIGINT) and other termination signals
-process.on('SIGINT', () => {
-  log('\n\n  [!] Interrupted (Ctrl+C)', 'yellow');
-  cleanup(130); // Standard exit code for SIGINT
+// Save files and cleanup
+async function saveAndCleanup(exitCode: number = 0) {
+  if (isCleaningUp) return;
+  isCleaningUp = true;
+  
+  if (sandboxInitialized) {
+    log('\n  [~] Saving changes and closing sandbox...', 'yellow');
+    try {
+      await closeSandbox(resolvedDir);
+      log('  [+] Changes saved, sandbox closed', 'green');
+    } catch (error) {
+      log(`  [x] Error: ${error}`, 'red');
+    }
+  }
+  
+  process.exit(exitCode);
+}
+
+// Show interrupt menu
+async function showInterruptMenu(): Promise<'continue' | 'followup' | 'save' | 'quit'> {
+  console.log('\n');
+  log('  ╔═══════════════════════════════════════╗', 'yellow');
+  log('  ║           INTERRUPTED (Ctrl+C)         ║', 'yellow');
+  log('  ╚═══════════════════════════════════════╝', 'yellow');
+  log('  Press Ctrl+C again to force quit\n', 'dim');
+  
+  const { action } = await prompts({
+    type: 'select',
+    name: 'action',
+    message: 'What would you like to do?',
+    choices: [
+      { title: 'Continue', description: 'Resume the current task', value: 'continue' },
+      { title: 'Follow up', description: 'Send a message to the agent', value: 'followup' },
+      { title: 'Save & exit', description: 'Copy files back and exit', value: 'save' },
+      { title: 'Quit', description: 'Exit WITHOUT saving changes', value: 'quit' },
+    ],
+  });
+  
+  if (action === 'followup') {
+    const { message } = await prompts({
+      type: 'text',
+      name: 'message',
+      message: 'Enter your follow-up message:',
+    });
+    followUpPrompt = message || '';
+    if (!followUpPrompt) {
+      return 'continue'; // No message entered, just continue
+    }
+  }
+  
+  return action || 'continue';
+}
+
+// Handle Ctrl+C (SIGINT)
+process.on('SIGINT', async () => {
+  const now = Date.now();
+  
+  // Double Ctrl+C within 1 second = force quit
+  if (now - lastCtrlC < 1000) {
+    log('\n\n  [!] Force quit', 'red');
+    process.exit(130);
+  }
+  lastCtrlC = now;
+  
+  // If we're already showing the menu, ignore
+  if (interruptPending) {
+    log('\n  [!] Press Ctrl+C again to force quit', 'yellow');
+    return;
+  }
+  
+  interruptPending = true;
+  
+  try {
+    const action = await showInterruptMenu();
+    interruptPending = false;
+    
+    if (action === 'quit') {
+      await cleanup(130);
+    } else if (action === 'save') {
+      await saveAndCleanup(0);
+    } else if (action === 'continue' || action === 'followup') {
+      // Resume - if there's a resolver waiting, call it
+      if (interruptResolver) {
+        interruptResolver(action);
+        interruptResolver = null;
+      }
+      log('  [>] Resuming...', 'green');
+    }
+  } catch {
+    // prompts was cancelled, just continue
+    interruptPending = false;
+    log('  [>] Resuming...', 'green');
+  }
 });
 
 process.on('SIGTERM', () => {
   log('\n\n  [!] Terminated', 'yellow');
-  cleanup(143); // Standard exit code for SIGTERM
+  cleanup(143);
 });
 
 // Handle uncaught errors
 process.on('uncaughtException', async (error) => {
   log(`\n\n  [x] Uncaught exception: ${error.message}`, 'red');
   console.error(error);
-  await cleanup(1);
+  await saveAndCleanup(1);
 });
 
 process.on('unhandledRejection', async (reason) => {
   log(`\n\n  [x] Unhandled rejection: ${reason}`, 'red');
-  await cleanup(1);
+  await saveAndCleanup(1);
 });
+
+// Export for use in agent loop
+export function getFollowUpPrompt(): string {
+  const prompt = followUpPrompt;
+  followUpPrompt = '';
+  return prompt;
+}
 
 // Track running token usage
 let runningUsage: LanguageModelUsage = {

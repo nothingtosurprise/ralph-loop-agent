@@ -671,7 +671,7 @@ async function copySandboxToLocal(localDir: string): Promise<void> {
 }
 
 /**
- * Close and cleanup the sandbox
+ * Close and cleanup the sandbox, copying files back to local
  */
 export async function closeSandbox(localDir: string): Promise<void> {
   if (sandbox) {
@@ -681,6 +681,22 @@ export async function closeSandbox(localDir: string): Promise<void> {
       // Type definitions may be incomplete for @vercel/sandbox
       await (sandbox as unknown as { close: () => Promise<void> }).close();
       log('  [-] Sandbox closed', 'dim');
+    } catch {
+      // Ignore close errors
+    }
+    sandbox = null;
+    sandboxDomain = null;
+  }
+}
+
+/**
+ * Close the sandbox WITHOUT copying files back (for quit without save)
+ */
+export async function closeSandboxWithoutCopy(): Promise<void> {
+  if (sandbox) {
+    try {
+      await (sandbox as unknown as { close: () => Promise<void> }).close();
+      log('  [-] Sandbox closed (no files copied)', 'dim');
     } catch {
       // Ignore close errors
     }
