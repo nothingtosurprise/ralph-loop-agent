@@ -84,6 +84,9 @@ export function createJudgeTools() {
           });
           
           log(`  [judge] Screenshot analyzed`, 'green');
+          // Show a preview of the analysis
+          const analysisPreview = analysisResult.text.slice(0, 200) + (analysisResult.text.length > 200 ? '...' : '');
+          log(`      Vision: ${analysisPreview}`, 'dim');
           return { success: true, path: output, url: targetUrl, analysis: analysisResult.text };
         } catch (error: any) {
           return { success: false, error: error.message };
@@ -193,6 +196,9 @@ export function createJudgeTools() {
           });
           
           log(`  [judge] Action completed and analyzed`, 'green');
+          // Show a preview of the analysis
+          const analysisPreview = analysisResult.text.slice(0, 200) + (analysisResult.text.length > 200 ? '...' : '');
+          log(`      Vision: ${analysisPreview}`, 'dim');
           return { success: true, action, analysis: analysisResult.text, content: extractedContent };
         } catch (error: any) {
           return { success: false, error: error.message, action };
