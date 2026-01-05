@@ -2,9 +2,11 @@
  * Judge agent - reviews the coding agent's work
  */
 
-import { generateText, stepCountIs } from 'ai';
+import { generateText, stepCountIs, type LanguageModelUsage } from 'ai';
 import { createJudgeTools } from './tools/judge.js';
-import { log } from './logger.js';
+import { log, logUsageReport } from './logger.js';
+
+const JUDGE_MODEL = 'anthropic/claude-opus-4.5';
 
 /**
  * Run the judge agent to review the work done.
@@ -13,13 +15,13 @@ export async function runJudge(
   taskPrompt: string,
   workSummary: string,
   filesModified: string[]
-): Promise<{ approved: boolean; feedback: string }> {
+): Promise<{ approved: boolean; feedback: string; usage: LanguageModelUsage }> {
   log('  [-] Judge reviewing...', 'cyan');
 
   try {
     const judgeTools = createJudgeTools();
     const result = await generateText({
-      model: 'anthropic/claude-opus-4.5' as any,
+      model: JUDGE_MODEL as any,
       tools: judgeTools,
       toolChoice: 'required',
       stopWhen: stepCountIs(10),
@@ -55,6 +57,9 @@ Run verification commands (type-check, build) and give your verdict.`,
       ],
     });
 
+    // Log usage for this judge run
+    logUsageReport(result.usage, JUDGE_MODEL, 'Judge');
+
     // Log all tool calls for debugging
     log(`      Judge made ${result.steps.length} steps`, 'dim');
     for (const step of result.steps) {
@@ -69,7 +74,7 @@ Run verification commands (type-check, build) and give your verdict.`,
           const output = toolResult.output as { approved: boolean; reason: string };
           log('  [+] Judge APPROVED', 'green');
           log(`      Reason: ${output.reason.slice(0, 100)}...`, 'dim');
-          return { approved: true, feedback: output.reason };
+          return { approved: true, feedback: output.reason, usage: result.usage };
         } else if (toolResult.toolName === 'requestChanges') {
           const output = toolResult.output as { approved: boolean; issues: string[]; suggestions: string[] };
           log('  [x] Judge REQUESTED CHANGES', 'yellow');
@@ -81,7 +86,7 @@ Run verification commands (type-check, build) and give your verdict.`,
             'Suggestions:',
             ...output.suggestions.map(s => `- ${s}`),
           ].join('\n');
-          return { approved: false, feedback };
+          return { approved: false, feedback, usage: result.usage };
         }
       }
     }
@@ -93,12 +98,27 @@ Run verification commands (type-check, build) and give your verdict.`,
     // Auto-approve if judge didn't give verdict but didn't find issues
     return { 
       approved: true, 
-      feedback: 'Judge completed review without explicit verdict. Auto-approving based on successful verification.' 
+      feedback: 'Judge completed review without explicit verdict. Auto-approving based on successful verification.',
+      usage: result.usage,
     };
   } catch (error) {
     log(`  [!] Judge error: ${error}`, 'red');
     // On error, auto-approve to avoid infinite loop
-    return { approved: true, feedback: 'Judge encountered an error. Auto-approving.' };
+    const emptyUsage: LanguageModelUsage = { 
+      inputTokens: 0, 
+      outputTokens: 0, 
+      totalTokens: 0,
+      inputTokenDetails: {
+        noCacheTokens: undefined,
+        cacheReadTokens: undefined,
+        cacheWriteTokens: undefined,
+      },
+      outputTokenDetails: {
+        textTokens: undefined,
+        reasoningTokens: undefined,
+      },
+    };
+    return { approved: true, feedback: 'Judge encountered an error. Auto-approving.', usage: emptyUsage };
   }
 }
 

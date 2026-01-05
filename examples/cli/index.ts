@@ -436,6 +436,9 @@ Sandbox dev server URL: ${sandboxDomain}`;
           lastFilesModified
         );
 
+        // Add judge usage to running total
+        runningUsage = addLanguageModelUsage(runningUsage, judgeResult.usage);
+
         if (judgeResult.approved) {
           log('  [+] Task approved by judge!', 'green');
           return {
