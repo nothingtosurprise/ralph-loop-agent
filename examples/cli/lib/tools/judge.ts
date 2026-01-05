@@ -18,14 +18,14 @@ export function createJudgeTools() {
       description: 'Take a screenshot of the web app for visual verification. Returns an analysis of what is visible.',
       inputSchema: z.object({
         url: z.string().optional().describe('URL to screenshot (defaults to sandbox dev server)'),
-        outputPath: z.string().optional().describe('Where to save the screenshot (defaults to judge-screenshot.png)'),
+        outputPath: z.string().optional().describe('Where to save the screenshot (defaults to /tmp/judge-screenshot.png)'),
         fullPage: z.boolean().optional().describe('Capture full scrollable page'),
       }),
       execute: async ({ url, outputPath, fullPage }) => {
         try {
           const targetUrl = url?.replace('localhost:3000', sandboxDomain || 'localhost:3000') 
             || `https://${sandboxDomain}`;
-          const output = outputPath || 'judge-screenshot.png';
+          const output = outputPath || '/tmp/judge-screenshot.png';
           const fullPageOpt = fullPage ? 'fullPage: true,' : '';
           
           log(`  [judge] Taking screenshot of ${targetUrl}`, 'blue');
@@ -141,7 +141,7 @@ export function createJudgeTools() {
     const page = await browser.newPage();
     await page.goto(${JSON.stringify(baseUrl)}, { waitUntil: 'networkidle', timeout: 30000 });
     ${actionCode}
-    await page.screenshot({ path: 'judge-interact.png' });
+    await page.screenshot({ path: '/tmp/judge-interact.png' });
     await browser.close();
   } catch (err) {
     console.error('Browser error:', err.message);
@@ -171,7 +171,7 @@ export function createJudgeTools() {
           }
           
           // Read and analyze screenshot as base64
-          const imageResult = await runInSandbox(`base64 -w 0 judge-interact.png 2>&1`);
+          const imageResult = await runInSandbox(`base64 -w 0 /tmp/judge-interact.png 2>&1`);
           if (imageResult.exitCode !== 0 || !imageResult.stdout) {
             return { success: true, action, content: extractedContent, note: 'Action completed but screenshot not available' };
           }

@@ -312,7 +312,7 @@ export function createCodingAgentTools() {
       description: 'Take a screenshot of the web app and get a visual description. The screenshot is analyzed by a vision model so you can "see" what the page looks like.',
       inputSchema: z.object({
         url: z.string().optional().describe('URL to screenshot (defaults to sandbox dev server)'),
-        outputPath: z.string().optional().describe('Where to save the screenshot (defaults to screenshot.png)'),
+        outputPath: z.string().optional().describe('Where to save the screenshot (defaults to /tmp/screenshot.png)'),
         fullPage: z.boolean().optional().describe('Capture full scrollable page'),
         analyze: z.boolean().optional().describe('Analyze the screenshot with vision model (default: true)'),
         question: z.string().optional().describe('Specific question to ask about the screenshot (e.g., "Is the header visible?")'),
@@ -321,7 +321,7 @@ export function createCodingAgentTools() {
         try {
           const targetUrl = url?.replace('localhost:3000', sandboxDomain || 'localhost:3000') 
             || `https://${sandboxDomain}`;
-          const output = outputPath || 'screenshot.png';
+          const output = outputPath || '/tmp/screenshot.png';
           const fullPageOpt = fullPage ? 'fullPage: true,' : '';
           
           log(`  [>] Taking screenshot of ${targetUrl}`, 'blue');

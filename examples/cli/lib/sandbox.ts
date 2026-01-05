@@ -452,6 +452,11 @@ async function copyLocalToSandbox(localDir: string): Promise<void> {
     return false;
   };
   
+  // Track skipped items for logging
+  const skippedSensitive: string[] = [];
+  const skippedBuildDirs: string[] = [];
+  const skippedLargeFiles: string[] = [];
+  
   async function collectFiles(dir: string, prefix = ''): Promise<void> {
     try {
       const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -462,6 +467,20 @@ async function copyLocalToSandbox(localDir: string): Promise<void> {
         
         // Always skip certain files/folders (regardless of gitignore)
         if (shouldAlwaysSkip(entry.name, entry.isDirectory())) {
+          // Categorize the skip reason
+          if (entry.isDirectory()) {
+            const buildDirs = ['node_modules', '.npm', '.pnpm-store', 'venv', '.venv', '__pycache__', 
+              '.pytest_cache', '.mypy_cache', '.ruff_cache', 'target', 'build', '.gradle', 'bin', 
+              'obj', 'packages', 'vendor', 'Pods', 'DerivedData', '.bundle', '.cache', 'dist', 
+              '.next', '.nuxt', '.output', '.turbo'];
+            if (buildDirs.includes(entry.name)) {
+              skippedBuildDirs.push(sandboxPath);
+            } else {
+              skippedSensitive.push(sandboxPath + '/');
+            }
+          } else {
+            skippedSensitive.push(sandboxPath);
+          }
           continue;
         }
         
@@ -480,6 +499,8 @@ async function copyLocalToSandbox(localDir: string): Promise<void> {
             // Skip files larger than 1MB
             if (content.length < 1024 * 1024) {
               filesToCopy.push({ path: sandboxPath, content });
+            } else {
+              skippedLargeFiles.push(`${sandboxPath} (${(content.length / 1024 / 1024).toFixed(1)}MB)`);
             }
           } catch {
             // Skip unreadable files
@@ -503,6 +524,17 @@ async function copyLocalToSandbox(localDir: string): Promise<void> {
     log(`  [+] Copied ${filesToCopy.length} files to sandbox`, 'green');
   } else {
     log(`  [i] Starting with empty sandbox (new project)`, 'dim');
+  }
+  
+  // Log skipped items
+  if (skippedSensitive.length > 0) {
+    log(`  [!] Skipped ${skippedSensitive.length} sensitive file(s): ${skippedSensitive.slice(0, 5).join(', ')}${skippedSensitive.length > 5 ? ` (+${skippedSensitive.length - 5} more)` : ''}`, 'yellow');
+  }
+  if (skippedBuildDirs.length > 0) {
+    log(`  [i] Skipped ${skippedBuildDirs.length} build/dependency folder(s): ${skippedBuildDirs.slice(0, 5).join(', ')}${skippedBuildDirs.length > 5 ? ` (+${skippedBuildDirs.length - 5} more)` : ''}`, 'dim');
+  }
+  if (skippedLargeFiles.length > 0) {
+    log(`  [i] Skipped ${skippedLargeFiles.length} large file(s) (>1MB): ${skippedLargeFiles.slice(0, 3).join(', ')}${skippedLargeFiles.length > 3 ? ` (+${skippedLargeFiles.length - 3} more)` : ''}`, 'dim');
   }
 }
 
