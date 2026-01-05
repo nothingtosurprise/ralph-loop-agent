@@ -560,28 +560,38 @@ Sandbox dev server URL: ${sandboxDomain}`;
     logSection('Final Notes');
     console.log(result.text);
 
-    // For repo mode: create PR after successful completion
-    if (repoInfo && result.completionReason === 'verified' && taskSummary) {
-      // Close sandbox first to copy files back
-      await closeSandbox(resolvedDir);
-      sandboxInitialized = false;
-      
-      // Create PR workflow (on host, not sandbox)
-      try {
-        const { branchName, prUrl } = await createPullRequestWorkflow(
-          resolvedDir,
-          taskPrompt,
-          taskSummary
-        );
+    // Handle successful completion
+    if (result.completionReason === 'verified') {
+      if (repoInfo && taskSummary) {
+        // Repo mode: close sandbox (copies files back), then create PR
+        await closeSandbox(resolvedDir);
+        sandboxInitialized = false;
         
-        if (prUrl) {
-          logSection('Pull Request');
-          log(`Branch: ${branchName}`, 'blue');
-          log(`PR: ${prUrl}`, 'green');
+        // Create PR workflow (on host, not sandbox)
+        try {
+          const { branchName, prUrl } = await createPullRequestWorkflow(
+            resolvedDir,
+            taskPrompt,
+            taskSummary
+          );
+          
+          if (prUrl) {
+            logSection('Pull Request');
+            log(`Branch: ${branchName}`, 'blue');
+            log(`PR: ${prUrl}`, 'green');
+          }
+        } catch (error) {
+          log(`  [!] Failed to create PR: ${error}`, 'yellow');
         }
-      } catch (error) {
-        log(`  [!] Failed to create PR: ${error}`, 'yellow');
+        
+        process.exit(0);
+      } else {
+        // Local mode: save changes back to local directory
+        await saveAndCleanup(0);
       }
+    } else {
+      // Not verified (max iterations, aborted, etc.) - don't auto-save
+      await cleanup(0);
     }
 
   } catch (error) {
@@ -589,9 +599,6 @@ Sandbox dev server URL: ${sandboxDomain}`;
     console.error(error);
     await cleanup(1);
   }
-  
-  // Normal completion
-  await cleanup(0);
 }
 
 main();
