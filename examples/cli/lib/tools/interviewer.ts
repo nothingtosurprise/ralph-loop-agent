@@ -1,5 +1,5 @@
 /**
- * Tools for the interviewer agent (codebase exploration)
+ * Tools for the Plan Mode agent (codebase exploration)
  */
 
 import { tool } from 'ai';
@@ -54,16 +54,5 @@ export function createInterviewerTools() {
         }
       },
     }),
-
-    provideSuggestions: tool({
-      description: 'Provide suggestions for a question based on your analysis of the codebase',
-      inputSchema: z.object({
-        suggestions: z.array(z.string()).length(3).describe('Exactly 3 specific, actionable suggestions based on the codebase'),
-      }),
-      execute: async ({ suggestions }) => {
-        return { suggestions };
-      },
-    }),
   };
 }
-
