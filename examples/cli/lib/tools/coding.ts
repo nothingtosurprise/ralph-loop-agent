@@ -2,12 +2,17 @@
  * Tools for the coding agent
  */
 
-import { tool } from 'ai';
+import { tool, generateText } from 'ai';
 import { z } from 'zod';
 import * as path from 'path';
 import { runInSandbox, readFromSandbox, writeToSandbox, getSandboxDomain } from '../sandbox.js';
 import { log } from '../logger.js';
 import { MAX_FILE_CHARS, MAX_FILE_LINES_PREVIEW } from '../constants.js';
+
+// Constants for Playwright in the sandbox
+const PLAYWRIGHT_CACHE = '/home/vercel-sandbox/.cache/ms-playwright';
+const GLOBAL_NODE_MODULES = '/home/vercel-sandbox/.global/npm/lib/node_modules';
+const PLAYWRIGHT_ENV = `NODE_PATH="${GLOBAL_NODE_MODULES}" PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_CACHE}"`;
 
 export function createCodingAgentTools() {
   const sandboxDomain = getSandboxDomain();
@@ -304,13 +309,15 @@ export function createCodingAgentTools() {
     }),
 
     takeScreenshot: tool({
-      description: 'Take a screenshot of the web app using Playwright. Useful for visual verification.',
+      description: 'Take a screenshot of the web app and get a visual description. The screenshot is analyzed by a vision model so you can "see" what the page looks like.',
       inputSchema: z.object({
         url: z.string().optional().describe('URL to screenshot (defaults to sandbox dev server)'),
         outputPath: z.string().optional().describe('Where to save the screenshot (defaults to screenshot.png)'),
         fullPage: z.boolean().optional().describe('Capture full scrollable page'),
+        analyze: z.boolean().optional().describe('Analyze the screenshot with vision model (default: true)'),
+        question: z.string().optional().describe('Specific question to ask about the screenshot (e.g., "Is the header visible?")'),
       }),
-      execute: async ({ url, outputPath, fullPage }) => {
+      execute: async ({ url, outputPath, fullPage, analyze = true, question }) => {
         try {
           const targetUrl = url?.replace('localhost:3000', sandboxDomain || 'localhost:3000') 
             || `https://${sandboxDomain}`;
@@ -319,76 +326,248 @@ export function createCodingAgentTools() {
           
           log(`  [>] Taking screenshot of ${targetUrl}`, 'blue');
           
-          const PLAYWRIGHT_CACHE = '/home/vercel-sandbox/.cache/ms-playwright';
-          const GLOBAL_NODE_MODULES = '/home/vercel-sandbox/.global/npm/lib/node_modules';
-          
-          // Debug: Check if playwright is available
-          const checkPlaywright = await runInSandbox('which playwright && playwright --version 2>&1 || echo "playwright not in PATH"');
-          log(`      Playwright check: ${checkPlaywright.stdout.trim().split('\n')[0]}`, 'dim');
-          
-          // Debug: Check if chromium is installed
-          const checkChromium = await runInSandbox(`ls -la ${PLAYWRIGHT_CACHE}/ 2>&1 | head -5 || echo "No playwright cache"`);
-          log(`      Chromium cache: ${checkChromium.stdout.trim().split('\n')[0]}`, 'dim');
-          
           // Create a Playwright script to take a screenshot
           const script = `const { chromium } = require('playwright');
 (async () => {
-  console.log('Starting screenshot script...');
-  console.log('Playwright version:', require('playwright/package.json').version);
   try {
-    console.log('Launching browser...');
     const browser = await chromium.launch({ 
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
-    console.log('Browser launched');
     const page = await browser.newPage();
-    console.log('Navigating to:', ${JSON.stringify(targetUrl)});
     await page.goto(${JSON.stringify(targetUrl)}, { waitUntil: 'networkidle', timeout: 30000 });
-    console.log('Page loaded, taking screenshot...');
     await page.screenshot({ path: ${JSON.stringify(output)}, ${fullPageOpt} });
-    console.log('Screenshot saved to ${output}');
+    console.log('Screenshot saved');
     await browser.close();
   } catch (err) {
-    console.error('Screenshot error:', err.message);
-    console.error('Stack:', err.stack);
+    console.error('Error:', err.message);
     process.exit(1);
   }
 })();
 `;
           
-          // Write script using sandbox file API (avoids shell escaping issues)
           await writeToSandbox('/tmp/screenshot.js', script);
+          const result = await runInSandbox(`${PLAYWRIGHT_ENV} node /tmp/screenshot.js 2>&1`);
           
-          // Debug: Show the script
-          log(`      Script written to /tmp/screenshot.js`, 'dim');
-          
-          // Run with NODE_PATH and PLAYWRIGHT_BROWSERS_PATH set
-          log(`      NODE_PATH: ${GLOBAL_NODE_MODULES}`, 'dim');
-          log(`      PLAYWRIGHT_BROWSERS_PATH: ${PLAYWRIGHT_CACHE}`, 'dim');
-          
-          // Run with environment variables set so it can find globally installed playwright and browsers
-          const result = await runInSandbox(
-            `NODE_PATH="${GLOBAL_NODE_MODULES}" PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_CACHE}" node /tmp/screenshot.js 2>&1`
-          );
-          
-          // Show full output for debugging
-          log(`      Exit code: ${result.exitCode}`, 'dim');
-          if (result.stdout) {
-            log(`      Output: ${result.stdout.slice(0, 500)}`, 'dim');
-          }
-          
-          if (result.exitCode === 0) {
-            log(`      Screenshot saved to ${output}`, 'green');
-            return { success: true, path: output, url: targetUrl };
-          } else {
+          if (result.exitCode !== 0) {
             log(`  [x] Screenshot failed`, 'red');
-            log(`      Full error: ${result.stdout}`, 'yellow');
-            return { success: false, error: result.stdout || result.stderr, exitCode: result.exitCode };
+            return { success: false, error: result.stdout || result.stderr };
           }
+          
+          log(`      Screenshot saved to ${output}`, 'green');
+          
+          // Analyze the screenshot if requested
+          if (analyze) {
+            log(`      Analyzing screenshot...`, 'dim');
+            
+            // Read the screenshot as base64
+            const imageResult = await runInSandbox(`base64 -w 0 ${output} 2>&1`);
+            if (imageResult.exitCode !== 0 || !imageResult.stdout) {
+              return { success: true, path: output, url: targetUrl, analysis: 'Could not read screenshot for analysis' };
+            }
+            
+            const imageBase64 = imageResult.stdout.trim();
+            
+            // Analyze with vision model
+            const prompt = question 
+              ? `Look at this screenshot and answer: ${question}`
+              : `Describe what you see in this screenshot of a web page. Focus on:
+1. Layout and structure (header, content, footer)
+2. Visual elements (colors, fonts, spacing)
+3. Any obvious issues (broken layout, overlapping elements, missing content)
+4. Overall appearance and user experience
+
+Be concise but thorough.`;
+
+            try {
+              const analysisResult = await generateText({
+                model: 'anthropic/claude-sonnet-4-20250514' as any,
+                messages: [
+                  {
+                    role: 'user',
+                    content: [
+                      { type: 'text', text: prompt },
+                      { type: 'image', image: `data:image/png;base64,${imageBase64}` },
+                    ],
+                  },
+                ],
+              });
+              
+              const analysis = analysisResult.text;
+              log(`      Analysis complete`, 'green');
+              
+              return { 
+                success: true, 
+                path: output, 
+                url: targetUrl,
+                analysis,
+              };
+            } catch (analysisError: any) {
+              log(`      Analysis failed: ${analysisError.message}`, 'yellow');
+              return { 
+                success: true, 
+                path: output, 
+                url: targetUrl,
+                analysis: `Screenshot taken but analysis failed: ${analysisError.message}`,
+              };
+            }
+          }
+          
+          return { success: true, path: output, url: targetUrl };
         } catch (error: any) {
-          log(`  [x] Screenshot failed with exception`, 'red');
-          log(`      Exception: ${error.message}`, 'yellow');
+          log(`  [x] Screenshot failed`, 'red');
+          return { success: false, error: error.message };
+        }
+      },
+    }),
+
+    browserInteract: tool({
+      description: 'Interact with the web app using Playwright. Navigate, click elements, fill forms, and get page state. Returns what the page looks like after the action.',
+      inputSchema: z.object({
+        action: z.enum(['navigate', 'click', 'fill', 'getContent', 'getAccessibility', 'waitFor']).describe('Action to perform'),
+        url: z.string().optional().describe('URL to navigate to (for navigate action)'),
+        selector: z.string().optional().describe('CSS selector for the element (for click, fill actions)'),
+        text: z.string().optional().describe('Text to type (for fill action)'),
+        waitForSelector: z.string().optional().describe('Selector to wait for (for waitFor action)'),
+        screenshotAfter: z.boolean().optional().describe('Take and analyze a screenshot after the action (default: true)'),
+      }),
+      execute: async ({ action, url, selector, text, waitForSelector, screenshotAfter = true }) => {
+        try {
+          const baseUrl = `https://${sandboxDomain}`;
+          const targetUrl = url?.replace('localhost:3000', sandboxDomain || 'localhost:3000') || baseUrl;
+          
+          log(`  [>] Browser: ${action}${selector ? ` on "${selector}"` : ''}${url ? ` to ${url}` : ''}`, 'blue');
+          
+          let actionCode = '';
+          switch (action) {
+            case 'navigate':
+              actionCode = `await page.goto(${JSON.stringify(targetUrl)}, { waitUntil: 'networkidle', timeout: 30000 });`;
+              break;
+            case 'click':
+              if (!selector) return { success: false, error: 'selector is required for click action' };
+              actionCode = `await page.click(${JSON.stringify(selector)});
+      await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});`;
+              break;
+            case 'fill':
+              if (!selector) return { success: false, error: 'selector is required for fill action' };
+              if (text === undefined) return { success: false, error: 'text is required for fill action' };
+              actionCode = `await page.fill(${JSON.stringify(selector)}, ${JSON.stringify(text)});`;
+              break;
+            case 'getContent':
+              actionCode = `const content = await page.content();
+      const textContent = await page.evaluate(() => document.body.innerText);
+      console.log('PAGE_CONTENT_START');
+      console.log(textContent.slice(0, 5000));
+      console.log('PAGE_CONTENT_END');`;
+              break;
+            case 'getAccessibility':
+              actionCode = `const snapshot = await page.accessibility.snapshot();
+      console.log('ACCESSIBILITY_START');
+      console.log(JSON.stringify(snapshot, null, 2).slice(0, 8000));
+      console.log('ACCESSIBILITY_END');`;
+              break;
+            case 'waitFor':
+              if (!waitForSelector) return { success: false, error: 'waitForSelector is required for waitFor action' };
+              actionCode = `await page.waitForSelector(${JSON.stringify(waitForSelector)}, { timeout: 10000 });`;
+              break;
+          }
+          
+          const screenshotCode = screenshotAfter ? `
+      await page.screenshot({ path: '/tmp/browser-action.png' });
+      console.log('SCREENSHOT_SAVED');` : '';
+          
+          const script = `const { chromium } = require('playwright');
+(async () => {
+  let browser;
+  try {
+    browser = await chromium.launch({ 
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    const page = await browser.newPage();
+    await page.goto(${JSON.stringify(baseUrl)}, { waitUntil: 'networkidle', timeout: 30000 });
+    
+    // Perform the action
+    ${actionCode}
+    ${screenshotCode}
+    
+    console.log('ACTION_SUCCESS');
+  } catch (err) {
+    console.error('Error:', err.message);
+    process.exit(1);
+  } finally {
+    if (browser) await browser.close();
+  }
+})();
+`;
+          
+          await writeToSandbox('/tmp/browser-interact.js', script);
+          const result = await runInSandbox(`${PLAYWRIGHT_ENV} node /tmp/browser-interact.js 2>&1`);
+          
+          if (result.exitCode !== 0) {
+            log(`  [x] Browser action failed`, 'red');
+            return { success: false, error: result.stdout || result.stderr };
+          }
+          
+          log(`      Action completed`, 'green');
+          
+          // Extract content if getContent action
+          let pageContent: string | undefined;
+          if (action === 'getContent') {
+            const match = result.stdout.match(/PAGE_CONTENT_START\n([\s\S]*?)\nPAGE_CONTENT_END/);
+            pageContent = match?.[1]?.trim();
+          }
+          
+          // Extract accessibility if getAccessibility action
+          let accessibility: any;
+          if (action === 'getAccessibility') {
+            const match = result.stdout.match(/ACCESSIBILITY_START\n([\s\S]*?)\nACCESSIBILITY_END/);
+            if (match?.[1]) {
+              try {
+                accessibility = JSON.parse(match[1]);
+              } catch {
+                accessibility = match[1];
+              }
+            }
+          }
+          
+          // Analyze screenshot if taken
+          let analysis: string | undefined;
+          if (screenshotAfter && result.stdout.includes('SCREENSHOT_SAVED')) {
+            log(`      Analyzing page state...`, 'dim');
+            
+            const imageResult = await runInSandbox('base64 -w 0 /tmp/browser-action.png 2>&1');
+            if (imageResult.exitCode === 0 && imageResult.stdout) {
+              try {
+                const analysisResult = await generateText({
+                  model: 'anthropic/claude-sonnet-4-20250514' as any,
+                  messages: [
+                    {
+                      role: 'user',
+                      content: [
+                        { type: 'text', text: `This is a screenshot after performing the action "${action}". Briefly describe what you see and whether the action appears to have worked.` },
+                        { type: 'image', image: `data:image/png;base64,${imageResult.stdout.trim()}` },
+                      ],
+                    },
+                  ],
+                });
+                analysis = analysisResult.text;
+                log(`      Analysis complete`, 'green');
+              } catch (e: any) {
+                analysis = `Screenshot taken but analysis failed: ${e.message}`;
+              }
+            }
+          }
+          
+          return { 
+            success: true, 
+            action,
+            pageContent,
+            accessibility,
+            analysis,
+          };
+        } catch (error: any) {
+          log(`  [x] Browser action failed`, 'red');
           return { success: false, error: error.message };
         }
       },
