@@ -28,11 +28,12 @@ import 'dotenv/config';
 
 import { RalphLoopAgent, iterationCountIs, addLanguageModelUsage, type VerifyCompletionContext } from 'ralph-loop-agent';
 import type { LanguageModelUsage, GenerateTextResult } from 'ai';
+import { generateText } from 'ai';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import prompts from 'prompts';
 
-import { log, logSection, logUsageReport } from './lib/logger.js';
+import { log, logSection, logUsageReport, colors } from './lib/logger.js';
 import { MAX_FILE_CHARS } from './lib/constants.js';
 import { initializeSandbox, closeSandbox, readFromSandbox, getSandboxDomain } from './lib/sandbox.js';
 import { getTaskPrompt, runInterviewAndGetPrompt } from './lib/interview.js';
@@ -103,7 +104,8 @@ let sandboxInitialized = false;
 let isCleaningUp = false;
 let interruptPending = false;
 let interruptResolver: ((action: 'continue' | 'followup' | 'save' | 'quit') => void) | null = null;
-let followUpPrompt = '';
+let pendingPlanUpdate: string | null = null;
+let currentTaskPrompt = '';
 
 // Cleanup function - just closes sandbox, doesn't copy files
 async function cleanup(exitCode: number = 0) {
@@ -143,6 +145,138 @@ async function saveAndCleanup(exitCode: number = 0) {
   process.exit(exitCode);
 }
 
+// Update plan with follow-up message
+async function updatePlanWithFollowUp(followUp: string): Promise<boolean> {
+  console.log();
+  log('╭───────────────────────────────────────────────────────────────╮', 'dim');
+  log('│  Updating Plan                                                │', 'dim');
+  log('╰───────────────────────────────────────────────────────────────╯', 'dim');
+  console.log();
+  log('  ○ Generating updated plan...', 'dim');
+
+  try {
+    const result = await generateText({
+      model: 'anthropic/claude-sonnet-4' as any,
+      system: `You are helping update a coding task plan based on user feedback.
+
+Given the current plan and a follow-up message, generate an UPDATED plan that incorporates the feedback.
+
+Output the updated plan in this EXACT format:
+
+\`\`\`plan
+# [Title]
+
+## Goal
+[Updated goal]
+
+## Steps
+1. [Step 1]
+2. [Step 2]
+...
+
+## Changes from Original
+- [What changed based on feedback]
+\`\`\`
+
+Be concise. Only change what's necessary based on the feedback.`,
+      prompt: `Current plan:
+${currentTaskPrompt}
+
+---
+
+User's follow-up message:
+${followUp}
+
+---
+
+Generate the updated plan incorporating this feedback.`,
+    });
+
+    // Extract the plan
+    const planMatch = result.text.match(/```plan\n([\s\S]*?)```/);
+    const updatedPlan = planMatch ? planMatch[1].trim() : result.text;
+
+    // Show the updated plan
+    console.log();
+    log('═'.repeat(60), 'cyan');
+    log('  UPDATED PLAN', 'bright');
+    log('═'.repeat(60), 'cyan');
+    console.log();
+    console.log(updatedPlan);
+    console.log();
+    log('═'.repeat(60), 'cyan');
+    console.log();
+
+    // Review loop
+    let confirmed = false;
+    while (!confirmed) {
+      const { action } = await prompts({
+        type: 'select',
+        name: 'action',
+        message: 'What would you like to do?',
+        choices: [
+          { title: 'Confirm - Apply this update', value: 'confirm' },
+          { title: 'Modify - Change the update', value: 'modify' },
+          { title: 'Cancel - Keep original plan', value: 'cancel' },
+        ],
+      }, { onCancel: () => false });
+
+      if (action === 'confirm') {
+        // Store the updated plan to inject on next iteration
+        pendingPlanUpdate = `The plan has been updated by the user. Here is the NEW plan you should follow:
+
+${updatedPlan}
+
+Please acknowledge this update and continue working according to the new plan.`;
+        confirmed = true;
+        log('  [+] Plan updated', 'green');
+        return true;
+      } else if (action === 'cancel') {
+        log('  [~] Keeping original plan', 'yellow');
+        return true; // Continue without update
+      } else if (action === 'modify') {
+        const { feedback } = await prompts({
+          type: 'text',
+          name: 'feedback',
+          message: 'What changes would you like?',
+        }, { onCancel: () => false });
+
+        if (feedback) {
+          log('  ○ Refining plan...', 'dim');
+          const refinedResult = await generateText({
+            model: 'anthropic/claude-sonnet-4' as any,
+            system: `Revise the plan based on user feedback. Output in the same \`\`\`plan format.`,
+            prompt: `Current updated plan:
+${updatedPlan}
+
+User's modification request:
+${feedback}
+
+Generate the revised plan.`,
+          });
+
+          const refinedMatch = refinedResult.text.match(/```plan\n([\s\S]*?)```/);
+          const refinedPlan = refinedMatch ? refinedMatch[1].trim() : refinedResult.text;
+
+          console.log();
+          log('═'.repeat(60), 'cyan');
+          log('  REVISED PLAN', 'bright');
+          log('═'.repeat(60), 'cyan');
+          console.log();
+          console.log(refinedPlan);
+          console.log();
+          log('═'.repeat(60), 'cyan');
+          console.log();
+        }
+      }
+    }
+  } catch (error) {
+    log(`  [x] Failed to update plan: ${error}`, 'red');
+  }
+
+  return true;
+}
+
 // Show interrupt menu
 async function showInterruptMenu(): Promise<'continue' | 'followup' | 'save' | 'quit'> {
   console.log('\n');
@@ -176,10 +310,14 @@ async function showInterruptMenu(): Promise<'continue' | 'followup' | 'save' | '
     }, {
       onCancel: () => false
     });
-    followUpPrompt = message || '';
-    if (!followUpPrompt) {
+    
+    if (!message) {
       return 'continue'; // No message entered, just continue
     }
+    
+    // Show plan update UI
+    await updatePlanWithFollowUp(message);
+    return 'continue'; // Continue with (possibly) updated plan
   }
   
   return action || 'continue';
@@ -255,13 +393,6 @@ process.on('unhandledRejection', async (reason) => {
   log(`\n\n  [x] Unhandled rejection: ${reason}`, 'red');
   await saveAndCleanup(1);
 });
-
-// Export for use in agent loop
-export function getFollowUpPrompt(): string {
-  const prompt = followUpPrompt;
-  followUpPrompt = '';
-  return prompt;
-}
 
 // Track running token usage
 let runningUsage: LanguageModelUsage = {
@@ -359,6 +490,9 @@ async function main() {
     taskPrompt = promptResult.prompt;
     promptSource = promptResult.source;
   }
+
+  // Store for follow-up plan updates
+  currentTaskPrompt = taskPrompt;
 
   log(`Prompt source: ${promptSource}`, 'dim');
   
@@ -476,6 +610,17 @@ Sandbox dev server URL: ${sandboxDomain}`;
     stopWhen: iterationCountIs(20),
 
     verifyCompletion: async ({ result, originalPrompt }: VerifyCompletionContext<CodingTools>) => {
+      // Check if there's a pending plan update from Ctrl+C follow-up
+      if (pendingPlanUpdate) {
+        const update = pendingPlanUpdate;
+        pendingPlanUpdate = null;
+        log('  [>] Injecting plan update into next iteration...', 'yellow');
+        return {
+          complete: false,
+          reason: update,
+        };
+      }
+
       // Check if markComplete was called
       for (const step of result.steps) {
         for (const toolResult of step.toolResults) {
