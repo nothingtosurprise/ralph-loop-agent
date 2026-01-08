@@ -4,6 +4,7 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
+    "examples:cli": "pnpm --filter ralph-loop-agent-cli-example cli",
     "test": "turbo run test",
     "type-check": "turbo run type-check"
   },
